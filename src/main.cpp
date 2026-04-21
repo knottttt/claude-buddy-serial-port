@@ -134,8 +134,8 @@ void applyDisplayMode() {
   characterInvalidate();  // redraws character on next tick (text mode path)
 }
 
-const char* menuItems[] = { "settings", "turn off", "help", "about", "demo", "close" };
-const uint8_t MENU_N = 6;
+const char* menuItems[] = { "settings", "turn off", "help", "about", "demo", "test approve", "close" };
+const uint8_t MENU_N = 7;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
