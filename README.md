@@ -1,91 +1,58 @@
-# claude-buddy-serial
+# Claude Buddy Serial (knottttt fork)
 
-> Fork note (knottttt): **Claude Buddy Serial** is a fork focused on a Windows
-> connectivity workaround. The original BLE Hardware Buddy flow was unstable
-> in my Windows environment (Claude Desktop could not reliably connect to the
-> device), so this fork gradually evolved toward a VS Code + USB serial bridge
-> implementation while keeping firmware compatibility and the buddy UX.
+## Fork 说明
 
-Claude for macOS and Windows can connect Claude Cowork and Claude Code to
-maker devices over BLE, so developers and makers can build hardware that
-displays permission prompts, recent messages, and other interactions. We've
-been impressed by the creativity of the maker community around Claude -
-providing a lightweight, opt-in API is our way of making it easier to build
-fun little hardware devices that integrate with Claude.
+这是 `knottttt` 基于官方 `claude-desktop-buddy` fork 后持续迭代的版本。  
+本 fork 不再以 Claude Desktop 的 BLE 连接为主路径，而是以 **Windows 下可稳定使用** 为目标，转向 **VS Code + USB Serial** 方案。
 
-> **Building your own device?** You don't need any of the code here. See
-> **[REFERENCE.md](REFERENCE.md)** for the wire protocol: Nordic UART
-> Service UUIDs, JSON schemas, and the folder push transport.
+## 为什么做这个 fork
 
-As an example, we built a desk pet on ESP32 that lives off permission
-approvals and interaction with Claude. It sleeps when nothing's happening,
-wakes when sessions start, gets visibly impatient when an approval prompt is
-waiting, and lets you approve or deny right from the device.
+- 在我的 Windows 环境中，Claude Desktop 与 Hardware Buddy 的 BLE 连接不稳定，无法长期可靠使用。
+- 为了保证可用性，改为通过串口桥接 Claude 活动状态到设备。
+- 在这个过程中，保留并增强了原有固件交互体验（ASCII pet、审批交互、状态提示等）。
 
-<p align="center">
-  <img src="docs/device.jpg" alt="M5StickC Plus running the buddy firmware" width="500">
-</p>
+## 我做了什么
 
-## Hardware
+### 1) VS Code 插件桥接（核心）
 
-The firmware targets ESP32 with the Arduino framework. As written, it
-depends on the M5StickCPlus library for its display, IMU, and button
-drivers—so you'll need that board, or a fork that swaps those drivers for
-your own pin layout.
+新增 `vscode-buddy/`，提供：
 
-## Flashing
+- 活动轮询：读取 `~/.claude/projects/*.jsonl`
+- 状态推送：每 800ms 通过串口发送状态
+- 面板控制：在 VS Code Sidebar 直接控制硬件
 
-Install
-[PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/),
-then:
+### 2) 串口硬件控制
+
+面板可直接发送：
+
+- 亮度：`{"set":{"brightness":N}}`，`N=0..4`
+- LED：`{"set":{"led":true|false}}`
+- 声音：`{"set":{"sound":true|false}}`
+- 宠物切换：`{"cmd":"species","idx":N}`，`N=0..17`
+
+### 3) 固件侧可靠性优化
+
+- `species` 严格校验：仅允许 `0..17`（以及 `0xFF` GIF sentinel）
+- 非法 `species` 返回失败 ack：
+  `{"ack":"species","ok":false,"reason":"idx_out_of_range"}`
+- `set` 批量应用时减少 NVS 写入：`led/sound` 仅在值变化时保存，且合并为单次 `settingsSave()`
+- 摇晃切换与时钟模式协同优化：时钟界面摇晃可退出到 pet 并显示 dizzy 动画
+
+### 4) 面板反馈策略
+
+- UI 保持乐观更新（点击立即反馈）
+- 发送失败或设备拒绝时，面板日志输出 `[control] ...`
+- 顶部显示短暂告警，便于定位链路问题
+
+## 快速开始（本 fork）
+
+### 固件
 
 ```bash
 pio run -t upload
 ```
 
-If you're starting from a previously-flashed device, wipe it first:
-
-```bash
-pio run -t erase && pio run -t upload
-```
-
-Once running, you can also wipe everything from the device itself: **hold A
-→ settings → reset → factory reset → tap twice**.
-
-## Pairing
-
-To pair your device with Claude, first enable developer mode (**Help →
-Troubleshooting → Enable Developer Mode**). Then, open the Hardware Buddy
-window in **Developer → Open Hardware Buddy…**, click **Connect**, and pick
-your device from the list. macOS will prompt for Bluetooth permission on
-first connect; grant it.
-
-<p align="center">
-  <img src="docs/menu.png" alt="Developer → Open Hardware Buddy… menu item" width="420">
-  <img src="docs/hardware-buddy-window.png" alt="Hardware Buddy window with Connect button and folder drop target" width="420">
-</p>
-
-Once paired, the bridge auto-reconnects whenever both sides are awake.
-
-If discovery isn't finding the stick:
-
-- Make sure it's awake (any button press)
-- Check the stick's settings menu → bluetooth is on
-
-## Fork direction: VS Code serial bridge (Windows BLE workaround)
-
-This fork adds a local VS Code bridge under `vscode-buddy/` that talks to the
-device over USB serial (default `COM4` at `115200`) and mirrors Claude
-activity from local `~/.claude/projects/*.jsonl`.
-
-Evolution path in this fork:
-
-1. Start from the official BLE buddy firmware and protocol.
-2. Work around Windows BLE connection issues by introducing serial gateway tooling.
-3. Add a VS Code sidebar panel for bridge lifecycle and hardware controls.
-4. Iterate protocol/control reliability (validation, visible control failures, reduced flash writes).
-
-### Start
+### VS Code 插件
 
 ```bash
 cd vscode-buddy
@@ -93,139 +60,13 @@ npm install
 npm run compile
 ```
 
-Then load the extension in VS Code (Extension Development Host), open the
-`Claude Buddy Serial` sidebar panel, and click `Start`.
+然后在 Extension Development Host 中打开 `Claude Buddy Serial` 面板并点击 `Start`。  
+默认串口：`COM4`，默认波特率：`115200`。
 
-### Panel controls
+## 当前定位
 
-- `Brightness` (0-4) sends `{"set":{"brightness":N}}`
-- `LED` ON/OFF sends `{"set":{"led":true|false}}`
-- `Sound` ON/OFF sends `{"set":{"sound":true|false}}`
-- `Pet` sends `{"cmd":"species","idx":N}` (`0..17`)
+这是一个以 Windows 可用性为优先的实用 fork，目标是：
 
-UI is optimistic by design: controls update immediately. If serial is down or
-the device rejects a command, the panel log shows `[control] ...` and a short
-top warning appears.
-
-## Controls
-
-|                         | Normal               | Pet         | Info        | Approval    |
-| ----------------------- | -------------------- | ----------- | ----------- | ----------- |
-| **A** (front)           | next screen          | next screen | next screen | **approve** |
-| **B** (right)           | scroll transcript    | next page   | next page   | **deny**    |
-| **Hold A**              | menu                 | menu        | menu        | menu        |
-| **Power** (left, short) | toggle screen off    |             |             |             |
-| **Power** (left, ~6s)   | hard power off       |             |             |             |
-| **Shake**               | dizzy                |             |             | —           |
-| **Face-down**           | nap (energy refills) |             |             |             |
-
-The screen auto-powers-off after 30s of no interaction (kept on while an
-approval prompt is up). Any button press wakes it.
-
-## ASCII pets
-
-Eighteen pets, each with seven animations (sleep, idle, busy, attention,
-celebrate, dizzy, heart). Menu → "next pet" cycles them with a counter.
-Choice persists to NVS.
-
-## GIF pets
-
-If you want a custom GIF character instead of an ASCII buddy, drag a
-character pack folder onto the drop target in the Hardware Buddy window. The
-app streams it over BLE and the stick switches to GIF mode live. **Settings
-→ delete char** reverts to ASCII mode.
-
-A character pack is a folder with `manifest.json` and 96px-wide GIFs:
-
-```json
-{
-  "name": "bufo",
-  "colors": {
-    "body": "#6B8E23",
-    "bg": "#000000",
-    "text": "#FFFFFF",
-    "textDim": "#808080",
-    "ink": "#000000"
-  },
-  "states": {
-    "sleep": "sleep.gif",
-    "idle": ["idle_0.gif", "idle_1.gif", "idle_2.gif"],
-    "busy": "busy.gif",
-    "attention": "attention.gif",
-    "celebrate": "celebrate.gif",
-    "dizzy": "dizzy.gif",
-    "heart": "heart.gif"
-  }
-}
-```
-
-State values can be a single filename or an array. Arrays rotate: each
-loop-end advances to the next GIF, useful for an idle activity carousel so
-the home screen doesn't loop one clip forever.
-
-GIFs are 96px wide; height up to ~140px stays on a 135×240 portrait screen.
-Crop tight to the character — transparent margins waste screen and shrink
-the sprite. `tools/prep_character.py` handles the resize: feed it source
-GIFs at any sizes and it produces a 96px-wide set where the character is the
-same scale in every state.
-
-The whole folder must fit under 1.8MB —
-`gifsicle --lossy=80 -O3 --colors 64` typically cuts 40–60%.
-
-See `characters/bufo/` for a working example.
-
-If you're iterating on a character and would rather skip the BLE round-trip,
-`tools/flash_character.py characters/bufo` stages it into `data/` and runs
-`pio run -t uploadfs` directly over USB.
-
-## The seven states
-
-| State       | Trigger                     | Feel                        |
-| ----------- | --------------------------- | --------------------------- |
-| `sleep`     | bridge not connected        | eyes closed, slow breathing |
-| `idle`      | connected, nothing urgent   | blinking, looking around    |
-| `busy`      | sessions actively running   | sweating, working           |
-| `attention` | approval pending            | alert, **LED blinks**       |
-| `celebrate` | level up (every 50K tokens) | confetti, bouncing          |
-| `dizzy`     | you shook the stick         | spiral eyes, wobbling       |
-| `heart`     | approved in under 5s        | floating hearts             |
-
-## Project layout
-
-```
-src/
-  main.cpp       — loop, state machine, UI screens
-  buddy.cpp      — ASCII species dispatch + render helpers
-  buddies/       — one file per species, seven anim functions each
-  ble_bridge.cpp — Nordic UART service, line-buffered TX/RX
-  character.cpp  — GIF decode + render
-  data.h         — wire protocol, JSON parse
-  xfer.h         — folder push receiver
-  stats.h        — NVS-backed stats, settings, owner, species choice
-characters/      — example GIF character packs
-tools/           — generators and converters
-vscode-buddy/    — VS Code extension + serial gateway + activity tracker
-```
-
-## Serial protocol additions used by the VS Code bridge
-
-In addition to heartbeat snapshots and permission responses, this firmware
-accepts:
-
-```json
-{"set":{"brightness":4,"led":true,"sound":false}}
-{"cmd":"species","idx":7}
-```
-
-`species` accepts `0..17` (ASCII pets) and `0xFF` (GIF mode sentinel when a
-GIF character exists). Invalid values are rejected with:
-
-```json
-{"ack":"species","ok":false,"reason":"idx_out_of_range"}
-```
-
-## Availability
-
-The BLE API is only available when the desktop apps are in developer mode
-(**Help → Troubleshooting → Enable Developer Mode**). It's intended for
-makers and developers and isn't an officially supported product feature.
+- 先稳定可用
+- 再逐步完善交互和协议细节
+- 持续保持与现有固件体验兼容
