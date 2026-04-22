@@ -1,0 +1,64 @@
+{
+  "name": "claude-buddy",
+  "displayName": "Claude Buddy",
+  "description": "M5StickC Plus hardware approval bridge for Claude Code",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claude-buddy",
+          "title": "Claude Buddy",
+          "icon": "media/buddy.svg"
+        }
+      ]
+    },
+    "views": {
+      "claude-buddy": [
+        {
+          "type": "webview",
+          "id": "claudeBuddy.panel",
+          "name": "Bridge"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Claude Buddy",
+      "properties": {
+        "claudeBuddy.bridgePath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to serial_gateway.py. E.g. f:/PlatformIO Core/claude-desktop-buddy/tools/serial_gateway.py"
+        },
+        "claudeBuddy.port": {
+          "type": "string",
+          "default": "auto",
+          "description": "Serial port for M5StickC Plus (e.g. COM4) or 'auto' for automatic detection"
+        },
+        "claudeBuddy.baud": {
+          "type": "number",
+          "default": 115200,
+          "description": "Serial baud rate"
+        }
+      }
+    },
+    "commands": [
+      { "command": "claudeBuddy.restart", "title": "Restart Bridge", "category": "Claude Buddy" },
+      { "command": "claudeBuddy.stop",    "title": "Stop Bridge",    "category": "Claude Buddy" },
+      { "command": "claudeBuddy.start",   "title": "Start Bridge",   "category": "Claude Buddy" }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}

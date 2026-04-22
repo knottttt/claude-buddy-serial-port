@@ -508,11 +508,14 @@ def make_handler(state: BridgeState, timeout_s: float):
 
         def _send_json(self, code: int, obj: dict[str, Any]) -> None:
             body = (json.dumps(obj, ensure_ascii=True) + "\n").encode("utf-8")
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # client disconnected before response (e.g. hook process killed)
 
         def do_GET(self) -> None:  # noqa: N802
             if self.path == "/health":

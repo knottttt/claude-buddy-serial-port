@@ -107,6 +107,7 @@ static void wake() {
   if (dimmed) { applyBrightness(); dimmed = false; }
 }
 bool     responseSent = false;
+uint32_t responseSentMs = 0;
 
 static void beep(uint16_t freq, uint16_t dur) {
   if (settings().sound) M5.Beep.tone(freq, dur);
@@ -133,6 +134,8 @@ void applyDisplayMode() {
   spr.fillSprite(0x0000);
   characterInvalidate();  // redraws character on next tick (text mode path)
 }
+
+void triggerOneShot(PersonaState s, uint32_t durMs);
 
 const char* menuItems[] = { "settings", "turn off", "help", "about", "demo", "test approve", "close" };
 const uint8_t MENU_N = 7;
@@ -315,7 +318,18 @@ void menuConfirm() {
       characterInvalidate();
       break;
     case 4: dataSetDemo(!dataDemo()); break;
-    case 5: menuOpen = false; characterInvalidate(); break;
+    case 5:
+      menuOpen = false;
+      strncpy(tama.promptId,   "test-001",         sizeof(tama.promptId)-1);
+      strncpy(tama.promptTool, "Bash",             sizeof(tama.promptTool)-1);
+      strncpy(tama.promptHint, "rm -rf /tmp/test", sizeof(tama.promptHint)-1);
+      tama.promptId[sizeof(tama.promptId)-1]     = 0;
+      tama.promptTool[sizeof(tama.promptTool)-1] = 0;
+      tama.promptHint[sizeof(tama.promptHint)-1] = 0;
+      triggerOneShot(P_ATTENTION, 60000);
+      characterInvalidate();
+      break;
+    case 6: menuOpen = false; characterInvalidate(); break;
   }
 }
 
@@ -1038,6 +1052,17 @@ void loop() {
     }
   }
 
+  // After sending a response, auto-clear the prompt after 2s. In production
+  // the desktop sends a clear; in test mode (no desktop) this unblocks the HUD.
+  if (responseSent && responseSentMs && millis() - responseSentMs > 2000) {
+    if (strcmp(tama.promptId, lastPromptId) == 0) {
+      tama.promptId[0] = 0;
+      tama.promptTool[0] = 0;
+      tama.promptHint[0] = 0;
+    }
+    responseSentMs = 0;
+  }
+
   bool inPrompt = tama.promptId[0] && !responseSent;
 
   // Button-press wake. Track which button woke the screen so its full
@@ -1081,6 +1106,7 @@ void loop() {
         snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"once\"}", tama.promptId);
         sendCmd(cmd);
         responseSent = true;
+        responseSentMs = millis();
         uint32_t tookS = (millis() - promptArrivedMs) / 1000;
         statsOnApproval(tookS);
         beep(2400, 60);
@@ -1114,6 +1140,7 @@ void loop() {
       snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"deny\"}", tama.promptId);
       sendCmd(cmd);
       responseSent = true;
+      responseSentMs = millis();
       statsOnDenial();
       beep(600, 60);
     } else if (resetOpen) {
