@@ -90,3 +90,7 @@ This is a practical fork with Windows usability as first priority:
 - stable first
 - iterate features second
 - keep firmware UX compatibility
+
+---
+
+*彩蛋：在主界面连按三次正面按钮，可以进入隐藏的 ASCII 老虎机小游戏。*
