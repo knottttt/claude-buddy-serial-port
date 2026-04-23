@@ -16,6 +16,8 @@ export interface ActivitySnapshot {
   detail: string;
   activeTs: number;
   jsonlFile: string;
+  source: string | null;
+  hasData: boolean;
 }
 
 function expandHome(p: string): string {
@@ -79,7 +81,17 @@ function isToolResultItem(item: Record<string, unknown>): boolean {
   return t === 'tool_result' || t === 'tool-output' || t === 'tool_output' || t === 'function_result';
 }
 
-function newestJsonl(rootDir: string): { file: string; mtimeMs: number } | null {
+function isEscalatedCall(argsRaw: unknown): boolean {
+  if (typeof argsRaw !== 'string' || !argsRaw.trim()) { return false; }
+  try {
+    const parsed = JSON.parse(argsRaw) as Record<string, unknown>;
+    return parsed.sandbox_permissions === 'require_escalated';
+  } catch {
+    return false;
+  }
+}
+
+function newestJsonl(rootDir: string, excludedDirs: string[]): { file: string; mtimeMs: number } | null {
   if (!fs.existsSync(rootDir)) { return null; }
   const stack = [rootDir];
   let newestPath = '';
@@ -96,13 +108,13 @@ function newestJsonl(rootDir: string): { file: string; mtimeMs: number } | null 
     for (const ent of entries) {
       const full = path.join(dir, ent.name);
       if (ent.isDirectory()) {
+        if (excludedDirs.includes(ent.name)) {
+          continue;
+        }
         stack.push(full);
         continue;
       }
       if (!ent.isFile() || !ent.name.endsWith('.jsonl')) {
-        continue;
-      }
-      if (full.includes(`${path.sep}subagents${path.sep}`)) {
         continue;
       }
       try {
@@ -151,24 +163,26 @@ function readTailLines(filePath: string, maxLines = MAX_LINES, maxBytes = MAX_BY
   return lines.map(x => x.trim()).filter(Boolean).slice(-maxLines);
 }
 
-function inferSnapshot(filePath: string, mtimeMs: number): ActivitySnapshot {
+function inferSnapshot(filePath: string, mtimeMs: number, source: string): ActivitySnapshot {
   const now = Date.now() / 1000;
   const shortPath = filePath.split(/[\\/]/).slice(-2).join('/');
   const lines = readTailLines(filePath);
   if (lines.length === 0) {
     const activeTs = mtimeMs / 1000;
     if (now - activeTs > SLEEP_SECS) {
-      return { mode: 'sleep', detail: 'claude: sleep', activeTs, jsonlFile: shortPath };
+      return { mode: 'sleep', detail: `${source}: sleep`, activeTs, jsonlFile: shortPath, source, hasData: true };
     }
-    return { mode: 'idle', detail: 'claude: file-active', activeTs, jsonlFile: shortPath };
+    return { mode: 'idle', detail: `${source}: file-active`, activeTs, jsonlFile: shortPath, source, hasData: true };
   }
 
   let lastActivityTs: number | null = null;
+  let lastAssistantTs: number | null = null;
   let lastToolUseTs: number | null = null;
   let lastToolResultTs: number | null = null;
   let lastPendingToolUseTs: number | null = null;
   let lastToolUseStopTs: number | null = null;
   let lastUserTs: number | null = null;
+  let hasCodexPayload = false;
   const pendingToolUseIds = new Map<string, number>();
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -181,6 +195,35 @@ function inferSnapshot(filePath: string, mtimeMs: number): ActivitySnapshot {
     }
 
     const ts = parseIsoToTs(obj.timestamp) ?? parseIsoToTs(obj.created_at) ?? (mtimeMs / 1000);
+
+    // Codex format: { type: "response_item", payload: { type: "function_call"|"function_call_output"|"message", ... } }
+    const codexPayload = (obj.type === 'response_item' && obj.payload && typeof obj.payload === 'object')
+      ? obj.payload as Record<string, unknown>
+      : null;
+    if (codexPayload) {
+      hasCodexPayload = true;
+      if (codexPayload.type === 'function_call') {
+        lastActivityTs = ts;
+        lastToolUseTs = ts;
+        const id = typeof codexPayload.call_id === 'string' ? codexPayload.call_id : '';
+        const requiresApproval = isEscalatedCall(codexPayload.arguments);
+        if (requiresApproval) {
+          if (id) { pendingToolUseIds.set(id, ts); } else { lastPendingToolUseTs = ts; }
+        }
+      } else if (codexPayload.type === 'function_call_output') {
+        lastActivityTs = ts;
+        lastToolResultTs = ts;
+        const id = typeof codexPayload.call_id === 'string' ? codexPayload.call_id : '';
+        if (id) { pendingToolUseIds.delete(id); }
+      } else if (codexPayload.type === 'message') {
+        const r = typeof codexPayload.role === 'string' ? codexPayload.role.toLowerCase() : '';
+        if (r === 'assistant' || r === 'user') { lastActivityTs = ts; }
+        if (r === 'assistant') { lastAssistantTs = ts; }
+        if (r === 'user') { lastUserTs = ts; }
+      }
+      continue;
+    }
+
     const role = roleOf(obj);
     const stopReason = (() => {
       const msg = obj.message;
@@ -191,6 +234,9 @@ function inferSnapshot(filePath: string, mtimeMs: number): ActivitySnapshot {
 
     if (role === 'assistant' || role === 'model' || role === 'agent' || role === 'user' || role === 'tool') {
       lastActivityTs = ts;
+    }
+    if (role === 'assistant' || role === 'model' || role === 'agent') {
+      lastAssistantTs = ts;
     }
     if (role === 'user') {
       lastUserTs = ts;
@@ -242,37 +288,43 @@ function inferSnapshot(filePath: string, mtimeMs: number): ActivitySnapshot {
     const pendingAge = Math.max(0, now - lastPendingToolUseTs);
     const debug = `pendingAge=${pendingAge.toFixed(1)}s pendingTs=${lastPendingToolUseTs.toFixed(1)} userTs=${lastUserTs ?? 0} stopTs=${lastToolUseStopTs ?? 0}`;
     if ((now - lastPendingToolUseTs) > STALE_SECS) {
-      return { mode: 'attention', detail: `claude: pending-approval ${debug}`, activeTs, jsonlFile: shortPath };
+      return { mode: 'attention', detail: `${source}: pending-approval ${debug}`, activeTs, jsonlFile: shortPath, source, hasData: true };
     }
-    return { mode: 'busy', detail: `claude: tool_use ${debug}`, activeTs, jsonlFile: shortPath };
+    return { mode: 'busy', detail: `${source}: tool_use ${debug}`, activeTs, jsonlFile: shortPath, source, hasData: true };
   }
 
   if ((now - activeTs) > SLEEP_SECS) {
-    return { mode: 'sleep', detail: 'claude: sleep', activeTs, jsonlFile: shortPath };
+    return { mode: 'sleep', detail: `${source}: sleep`, activeTs, jsonlFile: shortPath, source, hasData: true };
   }
 
   if (lastToolResultTs !== null && (lastToolUseTs === null || lastToolResultTs >= lastToolUseTs)) {
-    return { mode: 'busy', detail: 'claude: tool_result', activeTs, jsonlFile: shortPath };
-  }
-
-  if (lastToolUseTs !== null) {
-    if ((now - lastToolUseTs) > STALE_SECS) {
-      return { mode: 'attention', detail: 'claude: pending-approval', activeTs, jsonlFile: shortPath };
+    // Skip if the agent already wrote a final response after the tool result
+    if (lastAssistantTs === null || lastAssistantTs <= lastToolResultTs) {
+      return { mode: 'busy', detail: `${source}: tool_result`, activeTs, jsonlFile: shortPath, source, hasData: true };
     }
-    return { mode: 'busy', detail: 'claude: tool_use', activeTs, jsonlFile: shortPath };
   }
 
-  return { mode: 'idle', detail: 'claude: active', activeTs, jsonlFile: shortPath };
+  if (lastToolUseTs !== null && (lastAssistantTs === null || lastAssistantTs <= lastToolUseTs)) {
+    if ((now - lastToolUseTs) > STALE_SECS && !hasCodexPayload) {
+      return { mode: 'attention', detail: `${source}: pending-approval`, activeTs, jsonlFile: shortPath, source, hasData: true };
+    }
+    return { mode: 'busy', detail: `${source}: tool_use`, activeTs, jsonlFile: shortPath, source, hasData: true };
+  }
+
+  return { mode: 'idle', detail: `${source}: active`, activeTs, jsonlFile: shortPath, source, hasData: true };
 }
 
 export class ActivityTracker implements vscode.Disposable {
   private timer: ReturnType<typeof setInterval> | null = null;
-  private readonly root = expandHome('~/.claude/projects');
+  private readonly claudeRoot = expandHome('~/.claude/projects');
+  private readonly codexRoot = expandHome('~/.codex/sessions');
   private _snapshot: ActivitySnapshot = {
     mode: 'sleep',
-    detail: 'claude: sleep',
+    detail: 'no activity',
     activeTs: 0,
     jsonlFile: '',
+    source: null,
+    hasData: false,
   };
   private readonly _onSnapshotChange = new vscode.EventEmitter<ActivitySnapshot>();
   readonly onSnapshotChange = this._onSnapshotChange.event;
@@ -293,11 +345,28 @@ export class ActivityTracker implements vscode.Disposable {
   }
 
   refresh(): void {
-    const current = newestJsonl(this.root);
-    const next = current
-      ? inferSnapshot(current.file, current.mtimeMs)
-      : { mode: 'sleep' as const, detail: 'claude: sleep', activeTs: 0, jsonlFile: '' };
-    if (next.mode !== this._snapshot.mode || next.detail !== this._snapshot.detail) {
+    const claudeFile = newestJsonl(this.claudeRoot, ['subagents']);
+    const codexFile = newestJsonl(this.codexRoot, []);
+    const claudeSnapshot = claudeFile ? inferSnapshot(claudeFile.file, claudeFile.mtimeMs, 'claude') : null;
+    const codexSnapshot = codexFile ? inferSnapshot(codexFile.file, codexFile.mtimeMs, 'codex') : null;
+
+    let next: ActivitySnapshot;
+    if (claudeSnapshot && codexSnapshot) {
+      next = codexSnapshot.activeTs > claudeSnapshot.activeTs ? codexSnapshot : claudeSnapshot;
+    } else if (claudeSnapshot) {
+      next = claudeSnapshot;
+    } else if (codexSnapshot) {
+      next = codexSnapshot;
+    } else {
+      next = { mode: 'sleep', detail: 'no activity', activeTs: 0, jsonlFile: '', source: null, hasData: false };
+    }
+
+    if (
+      next.mode !== this._snapshot.mode ||
+      next.detail !== this._snapshot.detail ||
+      next.source !== this._snapshot.source ||
+      next.hasData !== this._snapshot.hasData
+    ) {
       this._snapshot = next;
       this._onSnapshotChange.fire(next);
     } else {

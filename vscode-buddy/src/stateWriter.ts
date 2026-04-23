@@ -20,28 +20,39 @@ export class StateWriter implements vscode.Disposable {
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
   }
 
+  private _sourceLabel(source: string | null): string {
+    if (!source || !source.trim()) { return 'AI'; }
+    return source.charAt(0).toUpperCase() + source.slice(1);
+  }
+
   private _push(): void {
     const connected = this.gateway.status === 'connected';
-    const mode = this.tracker.snapshot.mode;
+    const snapshot = this.tracker.snapshot;
+    const mode = snapshot.mode;
+    const sourceLabel = this._sourceLabel(snapshot.source);
 
     let total = 0;
     let running = 0;
     let waiting = 0;
-    let msg = 'No Claude activity';
+    let msg = 'No activity';
 
     if (!connected) {
       msg = 'Device disconnected';
+    } else if (!snapshot.hasData) {
+      msg = 'No activity';
+    } else if (mode === 'sleep') {
+      msg = `${sourceLabel} sleeping`;
     } else if (mode === 'attention') {
       total = 1;
       waiting = 1;
-      msg = 'awaiting approval';
+      msg = `${sourceLabel} awaiting approval`;
     } else if (mode === 'busy') {
       total = 1;
       running = 1;
-      msg = 'Claude busy';
+      msg = `${sourceLabel} busy`;
     } else if (mode === 'idle') {
       total = 1;
-      msg = 'Claude active';
+      msg = `${sourceLabel} active`;
     }
 
     const payload: Record<string, unknown> = { total, running, waiting, msg, entries: [msg] };

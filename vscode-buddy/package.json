@@ -54,7 +54,8 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "test": "npx tsx --test src/activityTracker.test.ts"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",
