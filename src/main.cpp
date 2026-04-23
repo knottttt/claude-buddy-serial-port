@@ -20,6 +20,7 @@ static void startBt() {
 
 #include "character.h"
 #include "stats.h"
+#include "slot_game.h"
 const int W = 135, H = 240;
 const int CX = W / 2;
 const int CY_BASE = 120;
@@ -46,7 +47,7 @@ uint8_t menuSel     = 0;
 uint8_t brightLevel = 4;           // 0..4 → ScreenBreath 20..100
 bool    btnALong    = false;
 
-enum DisplayMode { DISP_NORMAL, DISP_PET, DISP_INFO, DISP_COUNT };
+enum DisplayMode { DISP_NORMAL, DISP_PET, DISP_INFO, DISP_SLOT, DISP_COUNT };
 uint8_t displayMode = DISP_NORMAL;
 uint8_t infoPage = 0;
 uint8_t petPage = 0;
@@ -1144,9 +1145,13 @@ void loop() {
       } else if (menuOpen) {
         beep(1800, 30);
         menuSel = (menuSel + 1) % MENU_N;
+      } else if (displayMode == DISP_SLOT) {
+        beep(1800, 30);
+        slotOnBtnA();
       } else {
         beep(1800, 30);
         displayMode = (displayMode + 1) % DISP_COUNT;
+        if (displayMode == DISP_SLOT) slotInit();
         applyDisplayMode();
       }
     }
@@ -1181,6 +1186,10 @@ void loop() {
     } else if (displayMode == DISP_PET) {
       beep(2400, 30);
       petPage = (petPage + 1) % PET_PAGES;
+      applyDisplayMode();
+    } else if (displayMode == DISP_SLOT) {
+      beep(1800, 30);
+      displayMode = DISP_NORMAL;
       applyDisplayMode();
     } else {
       beep(2400, 30);
@@ -1254,6 +1263,8 @@ void loop() {
   if (napping || screenOff || landscapeClock) {
     // skip sprite render — face-down, powered off, or landscape clock
     // (which draws direct-to-LCD below)
+  } else if (displayMode == DISP_SLOT) {
+    slotTick();
   } else if (buddyMode) {
     buddyTick(activeState);
   } else if (characterLoaded()) {
@@ -1288,6 +1299,7 @@ void loop() {
     else if (clocking) drawClock();
     else if (displayMode == DISP_INFO) drawInfo();
     else if (displayMode == DISP_PET) drawPet();
+    else if (displayMode == DISP_SLOT) {}  // slot renders its own full frame
     else if (settings().hud) drawHUD();
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
